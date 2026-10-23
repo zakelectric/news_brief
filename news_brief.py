@@ -307,21 +307,28 @@ def run(date):
 FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" '
          'href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family='
          'Playfair+Display:wght@700;900&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;'
-         '1,8..60,400&display=swap" rel="stylesheet">')
+         '1,8..60,400&family=Orbitron:wght@500;700&display=swap" rel="stylesheet">')
 
 CSS = """
 :root{--bg:#f4f1ea;--paper:#fbf9f4;--ink:#18181a;--muted:#5d5b56;--rule:#18181a;--hair:#d6d1c4;
---hi:#b3261e;--md:#b26b00;--lo:#7b7f86;--chip:#ebe6da;--box:#f0ebdf}
+--hi:#b3261e;--md:#b26b00;--lo:#7b7f86;--chip:#ebe6da;--box:#f0ebdf;--brand:#00782a;--glow:none}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#121212;--paper:#191918;--ink:#ebe8e1;
---muted:#a4a19a;--rule:#ebe8e1;--hair:#34332f;--hi:#f2766b;--md:#e6a542;--lo:#8f939a;--chip:#2a2926;--box:#211f1c}}
+--muted:#a4a19a;--rule:#ebe8e1;--hair:#34332f;--hi:#f2766b;--md:#e6a542;--lo:#8f939a;--chip:#2a2926;--box:#211f1c;
+--brand:#00ff41;--glow:0 0 8px rgba(0,255,65,.45)}}
 :root[data-theme=dark]{--bg:#121212;--paper:#191918;--ink:#ebe8e1;--muted:#a4a19a;--rule:#ebe8e1;--hair:#34332f;
---hi:#f2766b;--md:#e6a542;--lo:#8f939a;--chip:#2a2926;--box:#211f1c}
+--hi:#f2766b;--md:#e6a542;--lo:#8f939a;--chip:#2a2926;--box:#211f1c;--brand:#00ff41;--glow:0 0 8px rgba(0,255,65,.45)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Source Serif 4",Georgia,serif}
 .sheet{max-width:1180px;margin:0 auto;padding:22px 16px 60px}
 .sans{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
 .mast{text-align:center;border-top:1px solid var(--rule);padding-top:10px}
-.mast h1{font:900 clamp(40px,7vw,76px)/1 "Playfair Display",Georgia,serif;margin:6px 0 10px;letter-spacing:-.01em}
+.mast h1{font:900 clamp(40px,7vw,76px)/1 "Playfair Display",Georgia,serif;margin:6px 0 8px;letter-spacing:-.01em}
+.brand{display:inline-flex;align-items:center;gap:9px;margin-top:6px;color:var(--brand);text-decoration:none;
+font:700 13px/1 Orbitron,sans-serif;letter-spacing:.24em;text-shadow:var(--glow)}
+.brand i{width:15px;height:15px;background:var(--brand);clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%)}
+.tagline{margin:0 0 12px;font:500 11px/1.4 Orbitron,sans-serif;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+.tagline span{white-space:nowrap}
+.stats{font-family:Orbitron,sans-serif;font-weight:500;color:var(--brand);text-shadow:var(--glow);letter-spacing:.12em}
 .dateline{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:3px double var(--rule);
 border-bottom:3px double var(--rule);padding:6px 2px;font-size:12px;text-transform:uppercase;letter-spacing:.08em}
 .days{display:flex;justify-content:center;gap:6px;flex-wrap:wrap;margin:8px 0 0;font-size:12px}
@@ -481,9 +488,10 @@ def render(date):
     out = [f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
            f'<title>Daily Brief {esc(date)}</title>{FONTS}<style>{CSS}</style></head><body><div class="sheet">']
-    out.append(f'<header class="mast"><h1>The Daily Brief</h1><div class="dateline sans"><span>{esc(pretty)}</span>'
-               f'<span>{esc(" · ".join(srcs))}</span><span>{len(stories)} stories · {data["item_count"]} reports'
-               f' · {esc(data["generated"][11:16])}</span></div><nav class="days sans">' + ''.join(
+    out.append(f'<header class="mast"><a class="brand" href="https://integrated-dynamics.net/"><i></i>INTEGRATED DYNAMICS</a>'
+               f'<h1>The Daily Brief</h1><p class="tagline"><span>Aggregate sources |</span> <span>Identify discrepancies</span></p>'
+               f'<div class="dateline sans"><span>{esc(pretty)}</span><span>{esc(" · ".join(srcs))}</span>'
+               f'<span class="stats">{data["item_count"]} reports · {len(stories)} stories · {esc(data["generated"][11:16])}</span></div><nav class="days sans">' + ''.join(
                    f'<a href="{d}.html"{" class=cur" if d == date else ""}>{d[5:]}</a>' for d in days[:14]) +
                '</nav></header>')
 
