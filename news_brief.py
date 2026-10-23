@@ -51,9 +51,15 @@ SOURCES = {
     'BBC': ['https://feeds.bbci.co.uk/news/rss.xml', 'https://feeds.bbci.co.uk/news/world/rss.xml'],
     'NPR': ['https://feeds.npr.org/1001/rss.xml', 'https://feeds.npr.org/1004/rss.xml',
             'https://feeds.npr.org/1014/rss.xml'],
+    # AP has no public RSS and its site sits behind a Cloudflare challenge that blocks plain requests,
+    # so these are hub pages read in headless Chromium (see browser_get).
+    'AP': ['https://apnews.com/hub/ap-top-news', 'https://apnews.com/world-news',
+           'https://apnews.com/us-news', 'https://apnews.com/politics'],
 }
+BROWSER_SOURCES = {'AP'}
+AP_PER_HUB = 30   # hub pages run long into older features; the top of each is today's news
 SOURCE_COLORS = {'CBS News': '#2f6fde', 'Fox News': '#c8312f', 'Al Jazeera': '#c98a10',
-                 'CNBC': '#1a8f6a', 'BBC': '#7a4fc9', 'NPR': '#3a7f9e'}
+                 'CNBC': '#1a8f6a', 'BBC': '#7a4fc9', 'NPR': '#3a7f9e', 'AP': '#c2408f'}
 
 
 def log(*a):
@@ -66,11 +72,76 @@ def strip_html(s):
 
 # ---------------------------------------------------------------- fetch
 
+def browser_get(urls):
+    """{url: html} via headless Chromium, for sites that challenge plain requests (AP).
+
+    Each page gets a fresh browser context: the first page of a context passes the Cloudflare
+    check, later ones in the same context are challenged. A page still on the challenge, or one
+    that fails to load, is left out and logged.
+    """
+    from playwright.sync_api import sync_playwright
+    pages = {}
+    if not urls:
+        return pages
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=['--disable-blink-features=AutomationControlled'])
+        for url in urls:
+            ctx = browser.new_context(user_agent=UA['User-Agent'])
+            try:
+                page = ctx.new_page()
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                page.wait_for_timeout(1500)
+                if 'Just a moment' in page.title():
+                    log(f'browser challenged {url}')
+                else:
+                    pages[url] = page.content()
+            except Exception as e:
+                log(f'browser failed {url}: {e}')
+            finally:
+                ctx.close()
+        browser.close()
+    return pages
+
+
+def ap_hub_entries(page, cutoff):
+    """Feed-like entries from an AP hub page's story cards (title, description, timestamp when shown)."""
+    from bs4 import BeautifulSoup
+    out = []
+    for card in BeautifulSoup(page, 'lxml').select('.PagePromo'):
+        a = card.select_one('.PagePromo-title a[href^="https://apnews.com/article/"]')
+        if not a:
+            continue
+        pub = None
+        ts = card.select_one('[data-timestamp]')
+        if ts and ts['data-timestamp'].isdigit():
+            pub = datetime.fromtimestamp(int(ts['data-timestamp']) / 1000, timezone.utc)
+            if pub < cutoff:
+                continue
+        desc = card.select_one('.PagePromo-description')
+        out.append({'link': a['href'], 'title': a.get_text(' ', strip=True),
+                    'summary': desc.get_text(' ', strip=True) if desc else '', 'pub': pub})
+        if len(out) >= AP_PER_HUB:
+            break
+    return out
+
+
 def fetch_items():
     cutoff = datetime.now(timezone.utc) - timedelta(hours=WINDOW_HOURS)
     items, seen = [], set()
     for source, urls in SOURCES.items():
         n = 0
+        if source in BROWSER_SOURCES:
+            for e in (e for page in browser_get(urls).values() for e in ap_hub_entries(page, cutoff)):
+                link = e['link'].split('?')[0]
+                if link in seen or not e['title']:
+                    continue
+                seen.add(link)
+                n += 1
+                items.append({'id': f'{source.split()[0].lower()}{n}', 'source': source, 'title': e['title'],
+                              'summary': e['summary'][:400], 'link': link,
+                              'published': e['pub'].isoformat() if e['pub'] else '', 'feed_content': ''})
+            log(f'{source}: {n} items')
+            continue
         for url in urls:
             try:
                 r = requests.get(url, headers=UA, timeout=25)
@@ -107,10 +178,13 @@ def fetch_items():
 
 def fetch_article(item):
     text = ''
+    page = item.pop('page', None)   # prefetched in the browser for BROWSER_SOURCES
     try:
-        r = requests.get(item['link'], headers=UA, timeout=25)
-        if r.ok:
-            text = trafilatura.extract(r.text, include_comments=False, include_tables=False) or ''
+        if page is None and item['source'] not in BROWSER_SOURCES:
+            r = requests.get(item['link'], headers=UA, timeout=25)
+            page = r.text if r.ok else None
+        if page:
+            text = trafilatura.extract(page, include_comments=False, include_tables=False) or ''
     except Exception as e:
         log(f'article failed {item["link"]}: {e}')
     if len(text) < len(item.get('feed_content', '')):
@@ -140,7 +214,7 @@ def claude(system, prompt, schema, effort='medium', timeout=1200, tries=2):
 
 
 CLUSTER_SYSTEM = f"""You are the editor of a daily cross-outlet news brief. You get headline items from several
-outlets (CBS News, Fox News, Al Jazeera, CNBC, BBC, NPR) published in roughly the last day.
+outlets ({', '.join(SOURCES)}) published in roughly the last day.
 
 Pick the {TOP_STORIES} most important news stories of the day and group every item that reports on the same
 specific story (same event or development, not just the same broad topic). Rank by real-world
@@ -269,6 +343,11 @@ def run(date):
             if counts[it['source']] <= PER_SOURCE_PER_STORY:
                 to_fetch.append(it)
     log(f'fetching {len(to_fetch)} articles')
+    # Playwright's sync API is not thread-safe, so browser pages load here, before the pool.
+    pages = browser_get([it['link'] for it in to_fetch if it['source'] in BROWSER_SOURCES])
+    for it in to_fetch:
+        if it['link'] in pages:
+            it['page'] = pages[it['link']]
     with ThreadPoolExecutor(8) as ex:
         for it, text in zip(to_fetch, ex.map(fetch_article, to_fetch)):
             it['text'] = text
