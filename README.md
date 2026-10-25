@@ -4,7 +4,7 @@
 
 Every morning at 5 AM Pacific, this script reads the latest reporting from **CBS News, Fox News, Al Jazeera, CNBC, BBC, NPR and the AP**. It picks the day's biggest stories and lines up how each outlet covered them. Then it flags the places where their accounts differ: a conflicting fact, a different framing, or something one outlet leaves out. The result is published as a newspaper-style front page.
 
-### → Read today's brief: [integrated-dynamics.net/news_brief](https://integrated-dynamics.net/news_brief/)
+### → Read today's brief: [integrated-dynamics.net/news](https://integrated-dynamics.net/news/)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/front-page-dark.png">

@@ -5,11 +5,11 @@ summarize each, and flag where the outlets disagree.
     python news_brief.py render [--date ...]       # re-render HTML from saved JSON
     python news_brief.py overview [--date ...]     # rewrite only the top brief, then re-render
     python news_brief.py reanalyze [--date ...]    # refetch saved stories' articles, redo analysis + brief
-    python news_brief.py publish                   # copy pages to integrated-dynamics.net/news_brief + deploy
+    python news_brief.py publish                   # copy pages to integrated-dynamics.net/news + deploy
 
 LLM work goes through headless `claude -p` (billed to the Claude Max login, not an API key).
 Output lands in site/ (served by the news_brief_web tmux session) and is published to
-https://integrated-dynamics.net/news_brief/ by `publish`.
+https://integrated-dynamics.net/news/ by `publish`.
 """
 import argparse
 import html
@@ -695,16 +695,16 @@ def render(date):
 
 # ---------------------------------------------------------------- publish
 
-PUBLIC_URL = 'https://integrated-dynamics.net/news_brief/'
+PUBLIC_URL = 'https://integrated-dynamics.net/news/'
 WEBSITE_CLONE = Path('/home/web/Programs/website_clone')
-PUBLISH_DIR = WEBSITE_CLONE / 'clients/IntegratedDynamics/news_brief'   # gitignored there; this repo is the source
+PUBLISH_DIR = WEBSITE_CLONE / 'clients/IntegratedDynamics/news'   # gitignored there; this repo is the source
 
 
 def publish():
     """Copy the pages into the integrated-dynamics.net site and deploy it to Netlify.
 
-    The copies get <base href="/news_brief/"> so their relative day links work whether the visitor
-    came in on /news_brief or /news_brief/, and noindex so the paraphrased reporting stays out of
+    The copies get <base href="/news/"> so their relative day links work whether the visitor
+    came in on /news or /news/, and noindex so the paraphrased reporting stays out of
     search under the business domain. Days that left site/ are removed from the public copy too.
     """
     PUBLISH_DIR.mkdir(exist_ok=True)
@@ -712,7 +712,7 @@ def publish():
     for old in PUBLISH_DIR.glob('*.html'):
         if old.name not in pages:
             old.unlink()
-    head = '<head><base href="/news_brief/"><meta name="robots" content="noindex">'
+    head = '<head><base href="/news/"><meta name="robots" content="noindex">'
     for name, page in pages.items():
         (PUBLISH_DIR / name).write_text(page.read_text().replace('<head>', head, 1))
     write_latest()
@@ -726,7 +726,7 @@ def publish():
 
 
 def write_latest():
-    """Write news_brief/latest.json for the integrated-dynamics.net home page teaser.
+    """Write news/latest.json for the integrated-dynamics.net home page teaser.
 
     Only counts, story titles and the discrepancy flags go out, not the paraphrased brief.
     """
