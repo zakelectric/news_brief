@@ -4,6 +4,7 @@ summarize each, and flag where the outlets disagree.
     python news_brief.py run [--date YYYY-MM-DD]   # fetch + analyze + render
     python news_brief.py render [--date ...]       # re-render HTML from saved JSON
     python news_brief.py overview [--date ...]     # rewrite only the top brief, then re-render
+    python news_brief.py reanalyze [--date ...]    # refetch saved stories' articles, redo analysis + brief
     python news_brief.py publish                   # copy pages to integrated-dynamics.net/news_brief + deploy
 
 LLM work goes through headless `claude -p` (billed to the Claude Max login, not an API key).
@@ -254,14 +255,31 @@ Write:
   different), medium, low. Do not invent disagreements: if outlets simply cover different angles without
   conflict, say so in coverage_note instead. Note when a source's text was only a short feed summary, since
   missing detail there is not a real omission.
+  Do NOT flag differences that are expected in a developing story and leave the reader with the same picture:
+  tallies that climb as officials update them (an earlier "nearly 1,000 arrests" and a later "1,314"),
+  rounding ("about 60" vs "64"), counts that differ only because they cover different times or places,
+  figures from different officials or agencies (a prosecutor's 64 arrests vs a ministry's 142 for the same
+  city), loose figures that overlap ("some 3,000" vs "more than 2,000"), or one outlet simply giving more
+  detail. Put the range in agreed_facts instead (e.g. "Arrests rose from about
+  1,000 Saturday to 1,314 by Sunday, per the interior minister"). Flag a number only when the outlets'
+  figures cannot both be right, or the gap would change a reader's sense of scale. Fewer, real flags are
+  better than many small ones; when the outlets agree, an empty list is the right answer.
+- discrepancy_score: 1-100, how much the outlets' accounts actually conflict, judged as a whole, not by
+  counting flags. 1-10: they tell the same story, any differences are wording, detail or updated figures.
+  11-30: minor differences in emphasis or detail a careful reader would notice. 31-60: real framing or
+  omission differences that shape the impression of the story. 61-85: conflicting facts on important
+  points. 86-100: the outlets describe fundamentally different events or versions of what happened.
+- score_reason: one short sentence (under 20 words) explaining the score.
 - coverage_note: one or two sentences on how coverage differed overall (angle, prominence, tone).
 - single_source_claims: notable claims only one outlet reports (attributed)."""
 
 ANALYZE_SCHEMA = {'type': 'object', 'additionalProperties': False,
-                  'required': ['headline', 'summary', 'agreed_facts', 'discrepancies', 'coverage_note',
-                               'single_source_claims'],
+                  'required': ['headline', 'summary', 'agreed_facts', 'discrepancies', 'discrepancy_score',
+                               'score_reason', 'coverage_note', 'single_source_claims'],
                   'properties': {
                       'headline': {'type': 'string'}, 'summary': {'type': 'string'},
+                      'discrepancy_score': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+                      'score_reason': {'type': 'string'},
                       'agreed_facts': {'type': 'array', 'items': {'type': 'string'}},
                       'discrepancies': {'type': 'array', 'items': {
                           'type': 'object', 'additionalProperties': False,
@@ -282,8 +300,9 @@ ANALYZE_SCHEMA = {'type': 'object', 'additionalProperties': False,
 
 OVERVIEW_SYSTEM = """You write the top of a daily cross-outlet news brief. From the per-story analyses, write:
 - brief: 3 sentences (about 80 words) covering the day's biggest news in plain language.
-- watch: the 3 most consequential discrepancies of the day (one sentence each, under 25 words, naming the
-  outlets)."""
+- watch: up to 3 of the day's most consequential discrepancies (one sentence each, under 25 words, naming the
+  outlets). Use each story's discrepancy_score as a guide; skip differences that are just updated figures or
+  detail level. If the outlets broadly agree today, list fewer, or none."""
 
 OVERVIEW_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['brief', 'watch'],
                    'properties': {'brief': {'type': 'string'},
@@ -334,7 +353,15 @@ def run(date):
     log(f'{len(items)} items; clustering')
     stories = cluster(items)
     log(f'{len(stories)} stories: ' + '; '.join(s['title'] for s in stories))
+    fetch_texts(stories)
+    analyze_all(stories)
 
+    log('writing overview')
+    overview = write_overview(stories)
+    save(date, len(items), overview, stories)
+
+
+def fetch_texts(stories):
     to_fetch = []
     for s in stories:
         counts = {}
@@ -355,6 +382,8 @@ def run(date):
         for it in s['items']:
             it.setdefault('text', it['summary'])
 
+
+def analyze_all(stories):
     log('analyzing stories')
 
     def safe_analyze(s):
@@ -365,18 +394,17 @@ def run(date):
             return None
     with ThreadPoolExecutor(4) as ex:
         for s, a in zip(stories, ex.map(safe_analyze, stories)):
-            s['analysis'] = a
+            s['analysis'] = a or s.get('analysis')   # a reanalyze failure keeps the old one
             log(f'done: {s["title"]} ({len(a["discrepancies"]) if a else "FAILED"})')
 
-    log('writing overview')
-    overview = write_overview(stories)
 
+def save(date, item_count, overview, stories):
     for s in stories:
         for it in s['items']:
             it.pop('feed_content', None)
             it.pop('text', None)
     data = {'date': date, 'generated': datetime.now().astimezone().isoformat(timespec='minutes'),
-            'sources': list(SOURCES), 'item_count': len(items), 'overview': overview, 'stories': stories}
+            'sources': list(SOURCES), 'item_count': item_count, 'overview': overview, 'stories': stories}
     (DATA / f'{date}.json').write_text(json.dumps(data, ensure_ascii=False, indent=1))
     render(date)
 
@@ -390,12 +418,13 @@ FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="
 
 CSS = """
 :root{--bg:#f4f1ea;--paper:#fbf9f4;--ink:#18181a;--muted:#5d5b56;--rule:#18181a;--hair:#d6d1c4;
---hi:#b3261e;--md:#b26b00;--lo:#7b7f86;--chip:#ebe6da;--box:#f0ebdf;--brand:#00782a;--glow:none}
+--hi:#b3261e;--md:#b26b00;--lo:#7b7f86;--ok:#2e7d32;--chip:#ebe6da;--box:#f0ebdf;--brand:#00782a;--glow:none}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#121212;--paper:#191918;--ink:#ebe8e1;
---muted:#a4a19a;--rule:#ebe8e1;--hair:#34332f;--hi:#f2766b;--md:#e6a542;--lo:#8f939a;--chip:#2a2926;--box:#211f1c;
---brand:#00ff41;--glow:0 0 8px rgba(0,255,65,.45)}}
+--muted:#a4a19a;--rule:#ebe8e1;--hair:#34332f;--hi:#f2766b;--md:#e6a542;--lo:#8f939a;--ok:#5cc970;--chip:#2a2926;
+--box:#211f1c;--brand:#00ff41;--glow:0 0 8px rgba(0,255,65,.45)}}
 :root[data-theme=dark]{--bg:#121212;--paper:#191918;--ink:#ebe8e1;--muted:#a4a19a;--rule:#ebe8e1;--hair:#34332f;
---hi:#f2766b;--md:#e6a542;--lo:#8f939a;--chip:#2a2926;--box:#211f1c;--brand:#00ff41;--glow:0 0 8px rgba(0,255,65,.45)}
+--hi:#f2766b;--md:#e6a542;--lo:#8f939a;--ok:#5cc970;--chip:#2a2926;--box:#211f1c;--brand:#00ff41;
+--glow:0 0 8px rgba(0,255,65,.45)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Source Serif 4",Georgia,serif}
 .sheet{max-width:1180px;margin:0 auto;padding:22px 16px 60px}
@@ -444,6 +473,12 @@ border-bottom:3px double var(--rule);padding:6px 2px;font-size:12px;text-transfo
 .sev{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--sev)}
 .high{--sev:var(--hi)}.medium{--sev:var(--md)}.low{--sev:var(--lo)}
 .calm{color:var(--muted);font-size:14px;margin:0}
+.meter{display:flex;align-items:center;gap:8px;font-size:12px;margin:0 0 10px;color:var(--muted)}
+.meter .bar{flex:0 0 90px;height:6px;border-radius:3px;background:var(--hair);overflow:hidden}
+.meter .bar i{display:block;height:100%;background:var(--m)}
+.meter b{color:var(--m);font-size:13px}
+.meter .why{flex-basis:100%;margin-top:-4px}.meter{flex-wrap:wrap}
+.m-ok{--m:var(--ok)}.m-lo{--m:var(--lo)}.m-md{--m:var(--md)}.m-hi{--m:var(--hi)}
 details.full{margin-top:12px;font-size:14px}
 details.full>summary{cursor:pointer;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
 h4{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:16px 0 6px}
@@ -504,6 +539,30 @@ def flags(a):
     return [d for d in discs if d['significance'] != 'low'], [d for d in discs if d['significance'] == 'low']
 
 
+SCORE_BANDS = [(10, 'ok', 'Sources align'), (30, 'lo', 'Minor differences'), (60, 'md', 'Notable differences'),
+               (85, 'hi', 'Conflicting accounts'), (100, 'hi', 'Contradictory')]
+
+
+def band(score):
+    return next((cls, label) for top, cls, label in SCORE_BANDS if score <= top)
+
+
+def meter_html(score, why='', prefix='Discrepancy'):
+    """1-100 bar; analyses saved before the score existed have none and get no meter."""
+    if score is None:
+        return ''
+    cls, label = band(score)
+    why = f'<span class="why">{esc(why)}</span>' if why else ''
+    return (f'<div class="meter sans m-{cls}" title="1 = outlets tell the same story, 100 = contradictory accounts">'
+            f'<span class="bar"><i style="width:{score}%"></i></span><span>{esc(prefix)} <b>{score}</b>/100 · '
+            f'{label}</span>{why}</div>')
+
+
+def day_score(stories):
+    scores = [s['analysis']['discrepancy_score'] for s in stories if 'discrepancy_score' in s['analysis']]
+    return round(sum(scores) / len(scores)) if scores else None
+
+
 def chips_html(s, sources):
     present = list(dict.fromkeys(it['source'] for it in s['items']))
     return ('<div class="chips sans">' +
@@ -515,10 +574,11 @@ def chips_html(s, sources):
 def differ_html(a, limit):
     """The 'where they differ' box: the top non-minor flags, compact."""
     main, _ = flags(a)
+    meter = meter_html(a.get('discrepancy_score'), a.get('score_reason', ''))
     if not main:
-        return ('<div class="differ sans"><div class="label">Where they differ</div>'
+        return ('<div class="differ sans"><div class="label">Where they differ</div>' + meter +
                 '<p class="calm">Outlets broadly agree on this one.</p></div>')
-    out = ['<div class="differ sans"><div class="label">Where they differ</div>']
+    out = ['<div class="differ sans"><div class="label">Where they differ</div>' + meter]
     for d in main[:limit]:
         vers = ''.join(f'<li style="--c:{color_for(v["source"])}"><b>{esc(v["source"])}:</b> {esc(v["says"])}</li>'
                        for v in d['versions'])
@@ -554,7 +614,8 @@ def full_html(s, open_label):
 def flag_count(a):
     main, _ = flags(a)
     hi = sum(d['significance'] == 'high' for d in main)
-    return f'{len(main)} flag{"s" if len(main) != 1 else ""}' + (f' · {hi} major' if hi else '')
+    score = f'{a["discrepancy_score"]}/100 · ' if 'discrepancy_score' in a else ''
+    return score + f'{len(main)} flag{"s" if len(main) != 1 else ""}' + (f' · {hi} major' if hi else '')
 
 
 def render(date):
@@ -576,10 +637,14 @@ def render(date):
 
     ov = data.get('overview') or {}
     if ov.get('brief'):
-        watch = ''
+        today = day_score(stories)
+        watch = meter_html(today, prefix="Today's discrepancy level")
         if ov.get('watch'):
-            watch = ('<div class="sans"><div class="label">Biggest discrepancies</div><ul>' +
-                     ''.join(f'<li>{esc(w)}</li>' for w in ov['watch']) + '</ul></div>')
+            watch += ('<div class="label">Biggest discrepancies</div><ul>' +
+                      ''.join(f'<li>{esc(w)}</li>' for w in ov['watch']) + '</ul>')
+        elif today is not None:
+            watch += '<p class="calm">The outlets broadly agree on today\'s top stories.</p>'
+        watch = f'<div class="sans">{watch}</div>' if watch else ''
         out.append(f'<section class="inbrief"><div><div class="label sans">In brief</div>'
                    f'<p>{esc(ov["brief"])}</p></div>{watch}</section>')
 
@@ -650,6 +715,7 @@ def publish():
     head = '<head><base href="/news_brief/"><meta name="robots" content="noindex">'
     for name, page in pages.items():
         (PUBLISH_DIR / name).write_text(page.read_text().replace('<head>', head, 1))
+    write_latest()
     deploy = subprocess.run(
         [str(WEBSITE_CLONE.parent / 'venv/bin/python'), '-c',
          "import ads_connector as a; print(a.deploy_to_netlify('integrated-dynamics.net'))"],
@@ -659,10 +725,34 @@ def publish():
     log(f'published {len(pages)} pages to {PUBLIC_URL}')
 
 
+def write_latest():
+    """Write news_brief/latest.json for the integrated-dynamics.net home page teaser.
+
+    Only counts, story titles and the discrepancy flags go out, not the paraphrased brief.
+    """
+    path = max(DATA.glob('*.json'), default=None)
+    if not path:
+        return
+    data = json.loads(path.read_text())
+    score = day_score(data['stories'])
+    latest = {
+        'date': data['date'],
+        'generated': data['generated'],
+        'level': score,                                     # 1-100, None before scores existed
+        'level_band': band(score) if score is not None else None,   # [css class, label]
+        'sources': data['sources'],
+        'article_count': data['item_count'],
+        'story_count': len(data['stories']),
+        'headlines': [s['title'] for s in data['stories'][:4]],
+        'flags': (data.get('overview') or {}).get('watch', []),
+    }
+    (PUBLISH_DIR / 'latest.json').write_text(json.dumps(latest, ensure_ascii=False, indent=1))
+
+
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['run', 'render', 'overview', 'publish'])
+    ap.add_argument('cmd', choices=['run', 'render', 'overview', 'reanalyze', 'publish'])
     ap.add_argument('--date', default=datetime.now().strftime('%Y-%m-%d'))
     args = ap.parse_args()
     if args.cmd == 'run':
@@ -673,6 +763,11 @@ if __name__ == '__main__':
         data['overview'] = write_overview(data['stories'])
         path.write_text(json.dumps(data, ensure_ascii=False, indent=1))
         render(args.date)
+    elif args.cmd == 'reanalyze':   # same stories, fresh article text, current prompts
+        data = json.loads((DATA / f'{args.date}.json').read_text())
+        fetch_texts(data['stories'])
+        analyze_all(data['stories'])
+        save(args.date, data['item_count'], write_overview(data['stories']), data['stories'])
     elif args.cmd == 'publish':
         publish()
     else:
