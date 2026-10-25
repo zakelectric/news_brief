@@ -69,8 +69,8 @@ All model calls go through the [Claude Code](https://docs.anthropic.com/en/docs/
 Requirements: Python 3.11+ (developed on 3.14), the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and logged in, and Chromium for Playwright.
 
 ```bash
-git clone https://github.com/zakelectric/sources.git
-cd sources
+git clone https://github.com/zakelectric/news_brief.git
+cd news_brief
 python -m venv venv && . venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium
