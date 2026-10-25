@@ -97,6 +97,10 @@ To change the outlets, edit `SOURCES` at the top of `news_brief.py`. Any RSS fee
 - The analysis is done by a language model. It is instructed to quote the outlets and not invent disagreements, and every flag shows the outlets' own words so you can check. It can still be wrong. Each story links back to the original articles.
 - The summaries paraphrase the outlets' reporting. Read the originals for anything that matters.
 
+## License
+
+The code is [MIT licensed](LICENSE). The generated briefs paraphrase and quote the outlets' reporting, which remains theirs.
+
 ---
 
 Built by [Integrated Dynamics](https://integrated-dynamics.net), a San Diego studio for custom software, automation and hardware.
